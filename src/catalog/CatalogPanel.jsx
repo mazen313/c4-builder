@@ -59,8 +59,8 @@ export default function CatalogPanel({ onClose, onAddSystem }) {
         ? { domain: domain.trim() }
         : {}),
     };
-    await loadCatalogFromUrl(urlInput.trim(), auth);
-    setTab('browse');
+    const success = await loadCatalogFromUrl(urlInput.trim(), auth);
+    if (success) setTab('browse');
   };
 
   const handleFolderSelect = async (e) => {

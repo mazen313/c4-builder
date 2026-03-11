@@ -54,7 +54,7 @@ export function CatalogProvider({ children }) {
   const [authConfig, setAuthConfig] = useState(null);
 
   const loadCatalogFromUrl = useCallback(async (url, auth = null) => {
-    if (!url) return;
+    if (!url) return false;
     setLoading(true);
     setError(null);
     const effectiveAuth = (auth?.authMode === 'ntlm' || auth?.useProxy || (auth?.username && auth?.password))
@@ -69,11 +69,14 @@ export function CatalogProvider({ children }) {
       if (result.errors.length > 0) {
         console.warn('Catalog loaded with warnings:', result.errors);
       }
+      setLoading(false);
+      return true;
     } catch (err) {
       setError(err.message || 'Failed to load catalog');
       console.error('Failed to load catalog:', err);
+      setLoading(false);
+      return false;
     }
-    setLoading(false);
   }, []);
 
   const loadCatalogFromFolder = useCallback(async (fileList) => {

@@ -303,6 +303,7 @@ export async function loadCatalog(baseUrl, authConfig = null) {
   );
 
   // Route and parse each file
+  let filesLoaded = 0;
   for (const { relPath, text } of results) {
     if (!text) continue;
     const route = routeFile(relPath);
@@ -311,9 +312,14 @@ export async function loadCatalog(baseUrl, authConfig = null) {
     try {
       const filename = relPath.split('/').pop();
       applyRoute(catalog, route, text, filename);
+      filesLoaded++;
     } catch (err) {
       errors.push(`Error parsing ${relPath}: ${err.message}`);
     }
+  }
+
+  if (filesLoaded === 0) {
+    throw new Error('Could not load any catalog files. Check the URL, credentials, and proxy settings.');
   }
 
   catalog.loaded = true;
