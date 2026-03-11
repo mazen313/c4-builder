@@ -4,7 +4,7 @@
 // ═══════════════════════════════════════════════════════════════
 
 import { useState, useMemo, useRef } from 'react';
-import { X, Search, Loader2, CheckCircle, AlertCircle, BookOpen, Plug, Plus, RefreshCw, Trash2, Lock, Eye, EyeOff, FolderOpen, ChevronDown, ChevronRight } from 'lucide-react';
+import { X, Search, Loader2, CheckCircle, AlertCircle, BookOpen, Plug, Plus, RefreshCw, Trash2, Lock, Eye, EyeOff, FolderOpen, ChevronDown, ChevronRight, Info, Shield } from 'lucide-react';
 import { useCatalog } from './CatalogContext.jsx';
 
 export default function CatalogPanel({ onClose, onAddSystem }) {
@@ -13,6 +13,8 @@ export default function CatalogPanel({ onClose, onAddSystem }) {
   const [username, setUsername] = useState(authConfig?.username || '');
   const [password, setPassword] = useState(authConfig?.password || '');
   const [showPassword, setShowPassword] = useState(false);
+  const [authMode, setAuthMode] = useState(authConfig?.authMode || 'basic');
+  const [useProxy, setUseProxy] = useState(authConfig?.useProxy || false);
   const [showUrlSection, setShowUrlSection] = useState(false);
   const [search, setSearch] = useState('');
   const [tab, setTab] = useState(catalog ? 'browse' : 'settings');
@@ -46,7 +48,13 @@ export default function CatalogPanel({ onClose, onAddSystem }) {
 
   const handleConnect = async () => {
     if (!urlInput.trim()) return;
-    const auth = username.trim() && password ? { username: username.trim(), password } : null;
+    const auth = {
+      authMode,
+      useProxy,
+      ...(authMode === 'basic' && username.trim() && password
+        ? { username: username.trim(), password }
+        : {}),
+    };
     await loadCatalogFromUrl(urlInput.trim(), auth);
     setTab('browse');
   };
@@ -166,9 +174,35 @@ export default function CatalogPanel({ onClose, onAddSystem }) {
                       </div>
                     </div>
 
-                    {/* Authentication */}
+                    {/* Auth Mode */}
                     <div>
-                      <label className="text-xs text-gray-400 block mb-1">Authentication <span className="text-gray-600">(optional)</span></label>
+                      <label className="text-xs text-gray-400 block mb-1.5">Authentication</label>
+                      <div className="flex gap-4">
+                        <label className="flex items-center gap-1.5 text-xs text-gray-300 cursor-pointer">
+                          <input
+                            type="radio"
+                            name="authMode"
+                            checked={authMode === 'basic'}
+                            onChange={() => setAuthMode('basic')}
+                            className="accent-blue-500"
+                          />
+                          Basic Auth (PAT)
+                        </label>
+                        <label className="flex items-center gap-1.5 text-xs text-gray-300 cursor-pointer">
+                          <input
+                            type="radio"
+                            name="authMode"
+                            checked={authMode === 'ntlm'}
+                            onChange={() => setAuthMode('ntlm')}
+                            className="accent-blue-500"
+                          />
+                          Windows (NTLM)
+                        </label>
+                      </div>
+                    </div>
+
+                    {/* Basic Auth credentials (hidden when NTLM) */}
+                    {authMode === 'basic' && (
                       <div className="space-y-2">
                         <input
                           type="text"
@@ -196,9 +230,36 @@ export default function CatalogPanel({ onClose, onAddSystem }) {
                           </button>
                         </div>
                       </div>
-                      <p className="text-[10px] text-gray-500 mt-1">
-                        For Azure DevOps with LDAP, use your network credentials or a Personal Access Token (PAT).
+                    )}
+
+                    {authMode === 'ntlm' && (
+                      <p className="text-[10px] text-gray-500">
+                        Your Windows domain credentials will be sent automatically by the browser.
                       </p>
+                    )}
+
+                    {/* Dev proxy toggle */}
+                    <div className="pt-1">
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={useProxy}
+                          onChange={e => setUseProxy(e.target.checked)}
+                          className="accent-blue-500"
+                        />
+                        <span className="text-xs text-gray-300">Route through dev proxy</span>
+                      </label>
+                      <p className="text-[10px] text-gray-500 mt-1 ml-5">
+                        Bypasses CORS restrictions and accepts custom SSL certificates. Only available during development (Vite dev server).
+                      </p>
+                    </div>
+
+                    {/* SSL note */}
+                    <div className="flex items-start gap-1.5 text-[10px] text-gray-500 pt-1">
+                      <Info size={12} className="flex-shrink-0 mt-0.5 text-gray-600" />
+                      <span>
+                        If you see SSL certificate errors without the proxy, install your company's CA certificate in your OS / browser trust store.
+                      </span>
                     </div>
                   </div>
                 )}

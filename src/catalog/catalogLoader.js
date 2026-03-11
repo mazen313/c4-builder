@@ -94,20 +94,45 @@ function setPath(obj, path, value) {
 }
 
 /**
- * Fetch a single file, returning null on 404 or network error
+ * Fetch a single file, returning null on 404 or network error.
  *
  * @param {string} baseUrl - Base URL to the common/ folder
  * @param {string} path - Relative path within common/
- * @param {{ username: string, password: string } | null} authConfig - Optional basic auth credentials
+ * @param {object|null} authConfig - Authentication and connection settings
+ * @param {string} [authConfig.authMode] - 'basic' (default) or 'ntlm'
+ * @param {string} [authConfig.username] - Username for basic auth
+ * @param {string} [authConfig.password] - Password / PAT for basic auth
+ * @param {boolean} [authConfig.useProxy] - Route through Vite dev proxy (bypasses CORS + SSL)
  */
 async function fetchFile(baseUrl, path, authConfig) {
-  const url = `${baseUrl.replace(/\/+$/, '')}/${path}`;
+  const fullUrl = `${baseUrl.replace(/\/+$/, '')}/${path}`;
   const headers = {};
-  if (authConfig?.username && authConfig?.password) {
+  const fetchOptions = { headers };
+
+  if (authConfig?.useProxy) {
+    // Route through Vite dev server proxy — bypasses CORS and accepts custom SSL certs
+    const proxyUrl = `/api/catalog-proxy?url=${encodeURIComponent(fullUrl)}`;
+    if (authConfig?.authMode !== 'ntlm' && authConfig?.username && authConfig?.password) {
+      headers['Authorization'] = `Basic ${btoa(authConfig.username + ':' + authConfig.password)}`;
+    }
+    try {
+      const res = await fetch(proxyUrl, fetchOptions);
+      if (!res.ok) return null;
+      return await res.text();
+    } catch {
+      return null;
+    }
+  }
+
+  // Direct browser fetch
+  if (authConfig?.authMode === 'ntlm') {
+    fetchOptions.credentials = 'include';
+  } else if (authConfig?.username && authConfig?.password) {
     headers['Authorization'] = `Basic ${btoa(authConfig.username + ':' + authConfig.password)}`;
   }
+
   try {
-    const res = await fetch(url, { headers });
+    const res = await fetch(fullUrl, fetchOptions);
     if (!res.ok) return null;
     return await res.text();
   } catch {

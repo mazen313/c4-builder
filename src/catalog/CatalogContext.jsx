@@ -22,10 +22,11 @@ const STORAGE_KEY = 'c4-catalog-url';
 const AUTH_STORAGE_KEY = 'c4-catalog-auth';
 
 /**
- * Persist auth config to localStorage (base64-encoded to avoid plain-text)
+ * Persist auth config to localStorage (base64-encoded to avoid plain-text).
+ * Stores authMode, useProxy, and credentials (if basic auth).
  */
 function saveAuth(auth) {
-  if (auth?.username && auth?.password) {
+  if (auth && (auth.authMode === 'ntlm' || auth.useProxy || (auth.username && auth.password))) {
     localStorage.setItem(AUTH_STORAGE_KEY, btoa(JSON.stringify(auth)));
   } else {
     localStorage.removeItem(AUTH_STORAGE_KEY);
@@ -56,7 +57,8 @@ export function CatalogProvider({ children }) {
     if (!url) return;
     setLoading(true);
     setError(null);
-    const effectiveAuth = auth?.username && auth?.password ? auth : null;
+    const effectiveAuth = (auth?.authMode === 'ntlm' || auth?.useProxy || (auth?.username && auth?.password))
+      ? auth : null;
     try {
       const result = await loadCatalog(url, effectiveAuth);
       setCatalog(result);
