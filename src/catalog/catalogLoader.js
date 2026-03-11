@@ -176,9 +176,24 @@ function applyRoute(catalog, route, text, filename) {
  * @param {boolean} [authConfig.useProxy] - Route through Vite dev proxy (bypasses CORS + SSL)
  */
 async function fetchFile(baseUrl, path, authConfig) {
-  // Handle Azure DevOps URLs with ?path= query parameter
   let fullUrl;
-  if (baseUrl.includes('?path=') || baseUrl.includes('&path=')) {
+
+  // Detect Azure DevOps Server web UI URLs and convert to Items API for raw content.
+  // Web UI: https://devops.company.com/Collection/Project/_git/Repo?path=/common&version=GBmain
+  // API:    https://devops.company.com/Collection/Project/_apis/git/repositories/Repo/items?path=/common/file.dsl&version=main
+  const adoMatch = baseUrl.match(
+    /^(https?:\/\/[^/]+(?:\/[^/]+)?)\/([^/]+)\/_git\/([^?/]+)\?.*path=([^&]+)(?:&version=GB(.+))?/
+  );
+  if (adoMatch) {
+    const [, adoBase, project, repo, scopePath, branch] = adoMatch;
+    const filePath = `${decodeURIComponent(scopePath).replace(/\/+$/, '')}/${path}`;
+    const apiUrl = new URL(`${adoBase}/${project}/_apis/git/repositories/${repo}/items`);
+    apiUrl.searchParams.set('path', filePath);
+    apiUrl.searchParams.set('api-version', '7.0');
+    if (branch) apiUrl.searchParams.set('versionDescriptor.version', branch);
+    fullUrl = apiUrl.toString();
+  } else if (baseUrl.includes('?path=') || baseUrl.includes('&path=')) {
+    // Generic URL with ?path= parameter — update path value
     const url = new URL(baseUrl);
     const basePath = url.searchParams.get('path') || '/';
     url.searchParams.set('path', `${basePath.replace(/\/+$/, '')}/${path}`);
@@ -203,7 +218,10 @@ async function fetchFile(baseUrl, path, authConfig) {
     try {
       const res = await fetch(proxyUrl, fetchOptions);
       if (!res.ok) return null;
-      return await res.text();
+      const text = await res.text();
+      // Reject HTML responses (web page instead of DSL content)
+      if (text.trimStart().startsWith('<!') || text.trimStart().startsWith('<html')) return null;
+      return text;
     } catch {
       return null;
     }
@@ -219,7 +237,10 @@ async function fetchFile(baseUrl, path, authConfig) {
   try {
     const res = await fetch(fullUrl, fetchOptions);
     if (!res.ok) return null;
-    return await res.text();
+    const text = await res.text();
+    // Reject HTML responses (web page instead of DSL content)
+    if (text.trimStart().startsWith('<!') || text.trimStart().startsWith('<html')) return null;
+    return text;
   } catch {
     return null;
   }
