@@ -192,7 +192,12 @@ async function fetchFile(baseUrl, path, authConfig) {
   if (authConfig?.useProxy) {
     // Route through Vite dev server proxy — bypasses CORS and accepts custom SSL certs
     const proxyUrl = `/api/catalog-proxy?url=${encodeURIComponent(fullUrl)}`;
-    if (authConfig?.authMode !== 'ntlm' && authConfig?.username && authConfig?.password) {
+    if (authConfig?.authMode === 'ntlm' && authConfig?.username && authConfig?.password) {
+      // Send NTLM credentials via custom headers — proxy performs the handshake server-side
+      headers['X-NTLM-Username'] = authConfig.username;
+      headers['X-NTLM-Password'] = authConfig.password;
+      if (authConfig.domain) headers['X-NTLM-Domain'] = authConfig.domain;
+    } else if (authConfig?.username && authConfig?.password) {
       headers['Authorization'] = `Basic ${btoa(authConfig.username + ':' + authConfig.password)}`;
     }
     try {
@@ -246,7 +251,11 @@ async function discoverFiles(baseUrl, authConfig) {
   if (authConfig?.useProxy) {
     try {
       const headers = {};
-      if (authConfig?.authMode !== 'ntlm' && authConfig?.username && authConfig?.password) {
+      if (authConfig?.authMode === 'ntlm' && authConfig?.username && authConfig?.password) {
+        headers['X-NTLM-Username'] = authConfig.username;
+        headers['X-NTLM-Password'] = authConfig.password;
+        if (authConfig.domain) headers['X-NTLM-Domain'] = authConfig.domain;
+      } else if (authConfig?.username && authConfig?.password) {
         headers['Authorization'] = `Basic ${btoa(authConfig.username + ':' + authConfig.password)}`;
       }
       const res = await fetch(`/api/catalog-discover?url=${encodeURIComponent(baseUrl)}`, { headers });

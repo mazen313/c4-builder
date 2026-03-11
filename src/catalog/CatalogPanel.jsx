@@ -12,6 +12,7 @@ export default function CatalogPanel({ onClose, onAddSystem }) {
   const [urlInput, setUrlInput] = useState(catalogUrl || '');
   const [username, setUsername] = useState(authConfig?.username || '');
   const [password, setPassword] = useState(authConfig?.password || '');
+  const [domain, setDomain] = useState(authConfig?.domain || '');
   const [showPassword, setShowPassword] = useState(false);
   const [authMode, setAuthMode] = useState(authConfig?.authMode || 'basic');
   const [useProxy, setUseProxy] = useState(authConfig?.useProxy || false);
@@ -51,8 +52,11 @@ export default function CatalogPanel({ onClose, onAddSystem }) {
     const auth = {
       authMode,
       useProxy,
-      ...(authMode === 'basic' && username.trim() && password
+      ...(username.trim() && password
         ? { username: username.trim(), password }
+        : {}),
+      ...(authMode === 'ntlm' && domain.trim()
+        ? { domain: domain.trim() }
         : {}),
     };
     await loadCatalogFromUrl(urlInput.trim(), auth);
@@ -201,42 +205,48 @@ export default function CatalogPanel({ onClose, onAddSystem }) {
                       </div>
                     </div>
 
-                    {/* Basic Auth credentials (hidden when NTLM) */}
-                    {authMode === 'basic' && (
-                      <div className="space-y-2">
+                    {/* Credentials */}
+                    <div className="space-y-2">
+                      {authMode === 'ntlm' && (
                         <input
                           type="text"
-                          value={username}
-                          onChange={e => setUsername(e.target.value)}
-                          placeholder="Username (LDAP / Azure DevOps)"
+                          value={domain}
+                          onChange={e => setDomain(e.target.value)}
+                          placeholder="Domain (e.g. CORP)"
                           className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-1.5 text-white text-xs placeholder-gray-500 focus:outline-none focus:border-blue-500"
                         />
-                        <div className="relative">
-                          <input
-                            type={showPassword ? 'text' : 'password'}
-                            value={password}
-                            onChange={e => setPassword(e.target.value)}
-                            placeholder="Password or Personal Access Token"
-                            className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-1.5 pr-9 text-white text-xs placeholder-gray-500 focus:outline-none focus:border-blue-500"
-                            onKeyDown={e => e.key === 'Enter' && handleConnect()}
-                          />
-                          <button
-                            type="button"
-                            onClick={() => setShowPassword(v => !v)}
-                            className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300"
-                            tabIndex={-1}
-                          >
-                            {showPassword ? <EyeOff size={13} /> : <Eye size={13} />}
-                          </button>
-                        </div>
+                      )}
+                      <input
+                        type="text"
+                        value={username}
+                        onChange={e => setUsername(e.target.value)}
+                        placeholder={authMode === 'ntlm' ? 'Username (Windows account)' : 'Username (LDAP / Azure DevOps)'}
+                        className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-1.5 text-white text-xs placeholder-gray-500 focus:outline-none focus:border-blue-500"
+                      />
+                      <div className="relative">
+                        <input
+                          type={showPassword ? 'text' : 'password'}
+                          value={password}
+                          onChange={e => setPassword(e.target.value)}
+                          placeholder={authMode === 'ntlm' ? 'Password' : 'Password or Personal Access Token'}
+                          className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-1.5 pr-9 text-white text-xs placeholder-gray-500 focus:outline-none focus:border-blue-500"
+                          onKeyDown={e => e.key === 'Enter' && handleConnect()}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowPassword(v => !v)}
+                          className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300"
+                          tabIndex={-1}
+                        >
+                          {showPassword ? <EyeOff size={13} /> : <Eye size={13} />}
+                        </button>
                       </div>
-                    )}
-
-                    {authMode === 'ntlm' && (
-                      <p className="text-[10px] text-gray-500">
-                        Your Windows domain credentials will be sent automatically by the browser.
-                      </p>
-                    )}
+                      {authMode === 'ntlm' && (
+                        <p className="text-[10px] text-gray-500">
+                          NTLM credentials are sent via the dev proxy for server-side authentication.
+                        </p>
+                      )}
+                    </div>
 
                     {/* Dev proxy toggle */}
                     <div className="pt-1">

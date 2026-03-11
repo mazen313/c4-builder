@@ -3,6 +3,42 @@ import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import https from 'node:https'
 import http from 'node:http'
+import httpntlm from 'httpntlm'
+
+/**
+ * Extract NTLM credentials from custom request headers.
+ * Returns { username, password, domain } or null if not NTLM.
+ */
+function getNtlmCreds(req) {
+  const username = req.headers['x-ntlm-username'];
+  const password = req.headers['x-ntlm-password'];
+  if (!username || !password) return null;
+  return {
+    username,
+    password,
+    domain: req.headers['x-ntlm-domain'] || '',
+  };
+}
+
+/**
+ * Perform an NTLM-authenticated GET request via httpntlm.
+ * Returns a Promise resolving to { statusCode, headers, body }.
+ */
+function ntlmGet(url, creds) {
+  return new Promise((resolve, reject) => {
+    httpntlm.get({
+      url,
+      username: creds.username,
+      password: creds.password,
+      domain: creds.domain,
+      workstation: '',
+      request: { rejectUnauthorized: false },
+    }, (err, res) => {
+      if (err) reject(err);
+      else resolve({ statusCode: res.statusCode, headers: res.headers, body: res.body });
+    });
+  });
+}
 
 /**
  * Vite plugin that provides a proxy middleware at /api/catalog-proxy.
@@ -16,7 +52,7 @@ function catalogProxyPlugin() {
   return {
     name: 'catalog-proxy',
     configureServer(server) {
-      server.middlewares.use('/api/catalog-proxy', (req, res) => {
+      server.middlewares.use('/api/catalog-proxy', async (req, res) => {
         const parsed = new URL(req.url, 'http://localhost');
         const targetUrl = parsed.searchParams.get('url');
 
@@ -35,6 +71,24 @@ function catalogProxyPlugin() {
           return;
         }
 
+        // NTLM authentication via httpntlm
+        const ntlmCreds = getNtlmCreds(req);
+        if (ntlmCreds) {
+          try {
+            const result = await ntlmGet(targetUrl, ntlmCreds);
+            res.writeHead(result.statusCode, {
+              'Content-Type': result.headers?.['content-type'] || 'text/plain',
+              'Access-Control-Allow-Origin': '*',
+            });
+            res.end(result.body);
+          } catch (err) {
+            res.writeHead(502, { 'Content-Type': 'text/plain' });
+            res.end(`NTLM proxy error: ${err.message}`);
+          }
+          return;
+        }
+
+        // Basic auth / no auth — plain HTTP proxy
         const transport = parsedTarget.protocol === 'https:' ? https : http;
         const proxyHeaders = {};
         if (req.headers.authorization) {
@@ -75,7 +129,7 @@ function catalogDiscoverPlugin() {
   return {
     name: 'catalog-discover',
     configureServer(server) {
-      server.middlewares.use('/api/catalog-discover', (req, res) => {
+      server.middlewares.use('/api/catalog-discover', async (req, res) => {
         const parsed = new URL(req.url, 'http://localhost');
         const baseUrl = parsed.searchParams.get('url');
 
@@ -106,6 +160,47 @@ function catalogDiscoverPlugin() {
         apiUrl.searchParams.set('api-version', '7.0');
         if (branch) apiUrl.searchParams.set('versionDescriptor.version', branch);
 
+        const apiUrlStr = apiUrl.toString();
+
+        // Helper to parse the Items API response into file paths
+        const parseItemsResponse = (statusCode, body) => {
+          if (statusCode !== 200) {
+            res.writeHead(statusCode, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+            res.end(JSON.stringify({ error: `Azure DevOps API returned ${statusCode}`, body }));
+            return;
+          }
+          try {
+            const data = JSON.parse(body);
+            const items = data.value || [];
+            const basePath = decodeURIComponent(scopePath).replace(/^\//, '').replace(/\/$/, '');
+            const files = items
+              .filter(item => !item.isFolder && item.path && item.path.endsWith('.dsl'))
+              .map(item => {
+                const fullPath = item.path.replace(/^\//, '');
+                return fullPath.startsWith(basePath + '/') ? fullPath.slice(basePath.length + 1) : fullPath;
+              });
+            res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+            res.end(JSON.stringify(files));
+          } catch (err) {
+            res.writeHead(500, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+            res.end(JSON.stringify({ error: `Failed to parse API response: ${err.message}` }));
+          }
+        };
+
+        // NTLM authentication via httpntlm
+        const ntlmCreds = getNtlmCreds(req);
+        if (ntlmCreds) {
+          try {
+            const result = await ntlmGet(apiUrlStr, ntlmCreds);
+            parseItemsResponse(result.statusCode, result.body);
+          } catch (err) {
+            res.writeHead(502, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+            res.end(JSON.stringify({ error: `NTLM proxy error: ${err.message}` }));
+          }
+          return;
+        }
+
+        // Basic auth / no auth — plain HTTP proxy
         const transport = apiUrl.protocol === 'https:' ? https : http;
         const proxyHeaders = { 'Accept': 'application/json' };
         if (req.headers.authorization) {
@@ -119,52 +214,11 @@ function catalogDiscoverPlugin() {
         }, (proxyRes) => {
           let body = '';
           proxyRes.on('data', (chunk) => { body += chunk; });
-          proxyRes.on('end', () => {
-            if (proxyRes.statusCode !== 200) {
-              res.writeHead(proxyRes.statusCode, {
-                'Content-Type': 'application/json',
-                'Access-Control-Allow-Origin': '*',
-              });
-              res.end(JSON.stringify({ error: `Azure DevOps API returned ${proxyRes.statusCode}`, body }));
-              return;
-            }
-
-            try {
-              const data = JSON.parse(body);
-              const items = data.value || [];
-              // Extract .dsl file paths relative to the scopePath
-              const basePath = decodeURIComponent(scopePath).replace(/^\//, '').replace(/\/$/, '');
-              const files = items
-                .filter(item => !item.isFolder && item.path && item.path.endsWith('.dsl'))
-                .map(item => {
-                  // item.path is like "/common/systemcatalog/cmdb.dsl"
-                  // Strip the base path prefix to get "systemcatalog/cmdb.dsl"
-                  const fullPath = item.path.replace(/^\//, '');
-                  return fullPath.startsWith(basePath + '/')
-                    ? fullPath.slice(basePath.length + 1)
-                    : fullPath;
-                });
-
-              res.writeHead(200, {
-                'Content-Type': 'application/json',
-                'Access-Control-Allow-Origin': '*',
-              });
-              res.end(JSON.stringify(files));
-            } catch (err) {
-              res.writeHead(500, {
-                'Content-Type': 'application/json',
-                'Access-Control-Allow-Origin': '*',
-              });
-              res.end(JSON.stringify({ error: `Failed to parse API response: ${err.message}` }));
-            }
-          });
+          proxyRes.on('end', () => parseItemsResponse(proxyRes.statusCode, body));
         });
 
         proxyReq.on('error', (err) => {
-          res.writeHead(502, {
-            'Content-Type': 'application/json',
-            'Access-Control-Allow-Origin': '*',
-          });
+          res.writeHead(502, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
           res.end(JSON.stringify({ error: `Proxy error: ${err.message}` }));
         });
 
