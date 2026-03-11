@@ -95,11 +95,19 @@ function setPath(obj, path, value) {
 
 /**
  * Fetch a single file, returning null on 404 or network error
+ *
+ * @param {string} baseUrl - Base URL to the common/ folder
+ * @param {string} path - Relative path within common/
+ * @param {{ username: string, password: string } | null} authConfig - Optional basic auth credentials
  */
-async function fetchFile(baseUrl, path) {
+async function fetchFile(baseUrl, path, authConfig) {
   const url = `${baseUrl.replace(/\/+$/, '')}/${path}`;
+  const headers = {};
+  if (authConfig?.username && authConfig?.password) {
+    headers['Authorization'] = `Basic ${btoa(authConfig.username + ':' + authConfig.password)}`;
+  }
   try {
-    const res = await fetch(url);
+    const res = await fetch(url, { headers });
     if (!res.ok) return null;
     return await res.text();
   } catch {
@@ -111,8 +119,8 @@ async function fetchFile(baseUrl, path) {
  * Try to load a catalog manifest file that lists all available DSL files.
  * This is optional — if it exists, it enables discovery of platform/* and deploymentsnode/* files.
  */
-async function loadManifest(baseUrl) {
-  const text = await fetchFile(baseUrl, 'catalog-manifest.json');
+async function loadManifest(baseUrl, authConfig) {
+  const text = await fetchFile(baseUrl, 'catalog-manifest.json', authConfig);
   if (!text) return null;
   try {
     return JSON.parse(text);
@@ -127,14 +135,16 @@ async function loadManifest(baseUrl) {
  * @param {string} baseUrl - URL pointing to the common/ folder
  *   e.g., "https://git.company.com/raw/repo/main/common"
  *   or "http://localhost:3001/common"
+ * @param {{ username: string, password: string } | null} authConfig - Optional basic auth credentials
+ *   for Azure DevOps or other servers requiring LDAP / PAT authentication
  * @returns {Promise<CompanyCatalog>} - Parsed catalog structure
  */
-export async function loadCatalog(baseUrl) {
+export async function loadCatalog(baseUrl, authConfig = null) {
   const catalog = emptyCatalog(baseUrl);
   const errors = [];
 
   // Try loading manifest for file discovery
-  const manifest = await loadManifest(baseUrl);
+  const manifest = await loadManifest(baseUrl, authConfig);
 
   // Determine platform files to load
   let platformPaths = PLATFORM_FILES;
@@ -147,7 +157,7 @@ export async function loadCatalog(baseUrl) {
   // Fetch all core files in parallel
   const coreResults = await Promise.all(
     CORE_FILES.map(async (entry) => {
-      const text = await fetchFile(baseUrl, entry.path);
+      const text = await fetchFile(baseUrl, entry.path, authConfig);
       return { ...entry, text };
     })
   );
@@ -169,7 +179,7 @@ export async function loadCatalog(baseUrl) {
   // Fetch platform files in parallel
   const platformResults = await Promise.all(
     platformPaths.map(async (path) => {
-      const text = await fetchFile(baseUrl, path);
+      const text = await fetchFile(baseUrl, path, authConfig);
       const filename = path.split('/').pop();
       return { path, text, filename };
     })
@@ -188,7 +198,7 @@ export async function loadCatalog(baseUrl) {
   // Fetch deployment node files in parallel
   const deployResults = await Promise.all(
     deployNodePaths.map(async (path) => {
-      const text = await fetchFile(baseUrl, path);
+      const text = await fetchFile(baseUrl, path, authConfig);
       return { path, text };
     })
   );
@@ -204,7 +214,7 @@ export async function loadCatalog(baseUrl) {
   }
 
   // Fetch styles
-  const stylesText = await fetchFile(baseUrl, 'styles/styles.dsl') || await fetchFile(baseUrl, 'styles');
+  const stylesText = await fetchFile(baseUrl, 'styles/styles.dsl', authConfig) || await fetchFile(baseUrl, 'styles', authConfig);
   if (stylesText) catalog.styles = parseStyles(stylesText);
 
   catalog.loaded = true;

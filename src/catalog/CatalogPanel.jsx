@@ -4,12 +4,15 @@
 // ═══════════════════════════════════════════════════════════════
 
 import { useState, useMemo } from 'react';
-import { X, Search, Loader2, CheckCircle, AlertCircle, BookOpen, Plug, Plus, RefreshCw, Trash2 } from 'lucide-react';
+import { X, Search, Loader2, CheckCircle, AlertCircle, BookOpen, Plug, Plus, RefreshCw, Trash2, Lock, Eye, EyeOff } from 'lucide-react';
 import { useCatalog } from './CatalogContext.jsx';
 
 export default function CatalogPanel({ onClose, onAddSystem }) {
-  const { catalog, loading, error, catalogUrl, loadCatalogFromUrl, loadSampleCatalog, clearCatalog } = useCatalog();
+  const { catalog, loading, error, catalogUrl, authConfig, loadCatalogFromUrl, loadSampleCatalog, clearCatalog } = useCatalog();
   const [urlInput, setUrlInput] = useState(catalogUrl || '');
+  const [username, setUsername] = useState(authConfig?.username || '');
+  const [password, setPassword] = useState(authConfig?.password || '');
+  const [showPassword, setShowPassword] = useState(false);
   const [search, setSearch] = useState('');
   const [tab, setTab] = useState(catalog ? 'browse' : 'settings');
 
@@ -41,7 +44,8 @@ export default function CatalogPanel({ onClose, onAddSystem }) {
 
   const handleConnect = async () => {
     if (!urlInput.trim()) return;
-    await loadCatalogFromUrl(urlInput.trim());
+    const auth = username.trim() && password ? { username: username.trim(), password } : null;
+    await loadCatalogFromUrl(urlInput.trim(), auth);
     setTab('browse');
   };
 
@@ -55,7 +59,8 @@ export default function CatalogPanel({ onClose, onAddSystem }) {
             <span className="text-white font-semibold text-sm">Company Catalog</span>
             {catalog && (
               <span className="flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-green-900/50 text-green-400">
-                <CheckCircle size={10} /> Connected
+                {authConfig ? <Lock size={10} /> : <CheckCircle size={10} />}
+                {authConfig ? 'Connected (Auth)' : 'Connected'}
               </span>
             )}
           </div>
@@ -113,6 +118,41 @@ export default function CatalogPanel({ onClose, onAddSystem }) {
                 </p>
               </div>
 
+              {/* Authentication */}
+              <div>
+                <label className="text-xs text-gray-400 block mb-1">Authentication <span className="text-gray-600">(optional)</span></label>
+                <div className="space-y-2">
+                  <input
+                    type="text"
+                    value={username}
+                    onChange={e => setUsername(e.target.value)}
+                    placeholder="Username (LDAP / Azure DevOps)"
+                    className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-1.5 text-white text-xs placeholder-gray-500 focus:outline-none focus:border-blue-500"
+                  />
+                  <div className="relative">
+                    <input
+                      type={showPassword ? 'text' : 'password'}
+                      value={password}
+                      onChange={e => setPassword(e.target.value)}
+                      placeholder="Password or Personal Access Token"
+                      className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-1.5 pr-9 text-white text-xs placeholder-gray-500 focus:outline-none focus:border-blue-500"
+                      onKeyDown={e => e.key === 'Enter' && handleConnect()}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword(v => !v)}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300"
+                      tabIndex={-1}
+                    >
+                      {showPassword ? <EyeOff size={13} /> : <Eye size={13} />}
+                    </button>
+                  </div>
+                </div>
+                <p className="text-[10px] text-gray-500 mt-1">
+                  For Azure DevOps with LDAP, use your network credentials or a Personal Access Token (PAT).
+                </p>
+              </div>
+
               {error && (
                 <div className="flex items-start gap-2 p-3 bg-red-900/30 border border-red-800 rounded text-xs text-red-300">
                   <AlertCircle size={14} className="flex-shrink-0 mt-0.5" />
@@ -137,7 +177,7 @@ export default function CatalogPanel({ onClose, onAddSystem }) {
                     <p className="text-xs text-gray-400">Catalog loaded from: <span className="text-white">{catalog.baseUrl}</span></p>
                     <div className="flex gap-2">
                       <button
-                        onClick={() => catalog.baseUrl !== 'sample' && loadCatalogFromUrl(catalog.baseUrl)}
+                        onClick={() => catalog.baseUrl !== 'sample' && loadCatalogFromUrl(catalog.baseUrl, authConfig)}
                         className="flex items-center gap-1 px-2 py-1 bg-gray-700 hover:bg-gray-600 text-white text-[10px] rounded"
                       >
                         <RefreshCw size={10} /> Reload
