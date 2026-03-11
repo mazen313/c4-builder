@@ -4,7 +4,7 @@
 // ═══════════════════════════════════════════════════════════════
 
 import { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { loadCatalog, createSampleCatalog } from './catalogLoader.js';
+import { loadCatalog, loadCatalogFromFiles, createSampleCatalog } from './catalogLoader.js';
 
 const CatalogContext = createContext({
   catalog: null,
@@ -13,6 +13,7 @@ const CatalogContext = createContext({
   catalogUrl: '',
   authConfig: null,
   loadCatalogFromUrl: async () => {},
+  loadCatalogFromFolder: async () => {},
   loadSampleCatalog: () => {},
   clearCatalog: () => {},
 });
@@ -73,6 +74,27 @@ export function CatalogProvider({ children }) {
     setLoading(false);
   }, []);
 
+  const loadCatalogFromFolder = useCallback(async (fileList) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const result = await loadCatalogFromFiles(fileList);
+      setCatalog(result);
+      setCatalogUrl('local');
+      setAuthConfig(null);
+      // Don't persist to localStorage — local files can't be auto-reloaded
+      localStorage.removeItem(STORAGE_KEY);
+      localStorage.removeItem(AUTH_STORAGE_KEY);
+      if (result.errors.length > 0) {
+        console.warn('Catalog loaded with warnings:', result.errors);
+      }
+    } catch (err) {
+      setError(err.message || 'Failed to load catalog from files');
+      console.error('Failed to load catalog from files:', err);
+    }
+    setLoading(false);
+  }, []);
+
   const loadSampleCatalog = useCallback(() => {
     const sample = createSampleCatalog();
     setCatalog(sample);
@@ -106,6 +128,7 @@ export function CatalogProvider({ children }) {
       catalogUrl,
       authConfig,
       loadCatalogFromUrl,
+      loadCatalogFromFolder,
       loadSampleCatalog,
       clearCatalog,
     }}>

@@ -223,6 +223,93 @@ export async function loadCatalog(baseUrl, authConfig = null) {
   return catalog;
 }
 
+// ═══════════════════════════════════════════════════════════════
+// LOCAL FILE LOADING
+// Loads catalog from a local folder via <input webkitdirectory>
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Read a File object as text
+ */
+function readFileAsText(file) {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = (e) => resolve(e.target.result);
+    reader.onerror = () => resolve(null);
+    reader.readAsText(file);
+  });
+}
+
+/**
+ * Load catalog from a local FileList (from <input webkitdirectory>).
+ * Matches files by their relative path against CORE_FILES, PLATFORM_FILES, etc.
+ *
+ * @param {FileList} fileList - Files from a folder picker input
+ * @returns {Promise<CompanyCatalog>} - Parsed catalog structure
+ */
+export async function loadCatalogFromFiles(fileList) {
+  const catalog = emptyCatalog('local');
+  const errors = [];
+
+  // Build a path→File map, normalizing the relative path.
+  // webkitRelativePath gives "folderName/systemcatalog/cmdb.dsl"
+  // We strip the first directory segment (the selected folder name) to get the relative path.
+  const fileMap = {};
+  for (const file of fileList) {
+    if (!file.name.endsWith('.dsl') && !file.name.endsWith('.json')) continue;
+    const relPath = file.webkitRelativePath.replace(/^[^/]+\//, '');
+    fileMap[relPath] = file;
+  }
+
+  // Process CORE_FILES
+  for (const entry of CORE_FILES) {
+    const file = fileMap[entry.path];
+    if (!file) {
+      errors.push(`File not found: ${entry.path}`);
+      continue;
+    }
+    try {
+      const text = await readFileAsText(file);
+      if (text) setPath(catalog, entry.target, entry.parser(text));
+    } catch (err) {
+      errors.push(`Error parsing ${entry.path}: ${err.message}`);
+    }
+  }
+
+  // Process platform files (any platform/*.dsl found in the folder)
+  const platformFiles = Object.entries(fileMap).filter(([p]) => p.startsWith('platform/') && p.endsWith('.dsl'));
+  for (const [path, file] of platformFiles) {
+    try {
+      const text = await readFileAsText(file);
+      if (text) catalog.platform.push(...parsePlatform(text, file.name));
+    } catch (err) {
+      errors.push(`Error parsing ${path}: ${err.message}`);
+    }
+  }
+
+  // Process deployment node files (any deploymentsnode/*.dsl)
+  const deployFiles = Object.entries(fileMap).filter(([p]) => p.startsWith('deploymentsnode/') && p.endsWith('.dsl'));
+  for (const [path, file] of deployFiles) {
+    try {
+      const text = await readFileAsText(file);
+      if (text) catalog.archetypes.deploymentNodes.push(...parseArchetypes(text, 'deploymentNode'));
+    } catch (err) {
+      errors.push(`Error parsing ${path}: ${err.message}`);
+    }
+  }
+
+  // Process styles
+  const stylesFile = fileMap['styles/styles.dsl'] || fileMap['styles'];
+  if (stylesFile) {
+    const text = await readFileAsText(stylesFile);
+    if (text) catalog.styles = parseStyles(text);
+  }
+
+  catalog.loaded = true;
+  catalog.errors = errors;
+  return catalog;
+}
+
 /**
  * Create a demo/sample catalog for testing without a server.
  * This provides realistic data matching the company structure.

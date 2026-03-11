@@ -3,18 +3,20 @@
 // Settings UI + system catalog browser with search
 // ═══════════════════════════════════════════════════════════════
 
-import { useState, useMemo } from 'react';
-import { X, Search, Loader2, CheckCircle, AlertCircle, BookOpen, Plug, Plus, RefreshCw, Trash2, Lock, Eye, EyeOff } from 'lucide-react';
+import { useState, useMemo, useRef } from 'react';
+import { X, Search, Loader2, CheckCircle, AlertCircle, BookOpen, Plug, Plus, RefreshCw, Trash2, Lock, Eye, EyeOff, FolderOpen, ChevronDown, ChevronRight } from 'lucide-react';
 import { useCatalog } from './CatalogContext.jsx';
 
 export default function CatalogPanel({ onClose, onAddSystem }) {
-  const { catalog, loading, error, catalogUrl, authConfig, loadCatalogFromUrl, loadSampleCatalog, clearCatalog } = useCatalog();
+  const { catalog, loading, error, catalogUrl, authConfig, loadCatalogFromUrl, loadCatalogFromFolder, loadSampleCatalog, clearCatalog } = useCatalog();
   const [urlInput, setUrlInput] = useState(catalogUrl || '');
   const [username, setUsername] = useState(authConfig?.username || '');
   const [password, setPassword] = useState(authConfig?.password || '');
   const [showPassword, setShowPassword] = useState(false);
+  const [showUrlSection, setShowUrlSection] = useState(false);
   const [search, setSearch] = useState('');
   const [tab, setTab] = useState(catalog ? 'browse' : 'settings');
+  const folderInputRef = useRef(null);
 
   const filteredSystems = useMemo(() => {
     if (!catalog) return { internal: [], external: [], persons: [] };
@@ -47,6 +49,15 @@ export default function CatalogPanel({ onClose, onAddSystem }) {
     const auth = username.trim() && password ? { username: username.trim(), password } : null;
     await loadCatalogFromUrl(urlInput.trim(), auth);
     setTab('browse');
+  };
+
+  const handleFolderSelect = async (e) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    await loadCatalogFromFolder(files);
+    setTab('browse');
+    // Reset input so the same folder can be re-selected
+    e.target.value = '';
   };
 
   return (
@@ -93,64 +104,104 @@ export default function CatalogPanel({ onClose, onAddSystem }) {
           {/* === SETTINGS TAB === */}
           {tab === 'settings' && (
             <div className="space-y-4">
+              {/* Hidden folder input */}
+              <input
+                ref={folderInputRef}
+                type="file"
+                // @ts-ignore — webkitdirectory is non-standard but widely supported
+                webkitdirectory=""
+                directory=""
+                multiple
+                className="hidden"
+                onChange={handleFolderSelect}
+              />
+
+              {/* Primary: Load from local folder */}
               <div>
-                <label className="text-xs text-gray-400 block mb-1">Catalog URL</label>
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={urlInput}
-                    onChange={e => setUrlInput(e.target.value)}
-                    placeholder="https://git.company.com/raw/repo/main/common"
-                    className="flex-1 bg-gray-800 border border-gray-600 rounded px-3 py-1.5 text-white text-xs placeholder-gray-500 focus:outline-none focus:border-blue-500"
-                    onKeyDown={e => e.key === 'Enter' && handleConnect()}
-                  />
-                  <button
-                    onClick={handleConnect}
-                    disabled={loading || !urlInput.trim()}
-                    className="flex items-center gap-1 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-700 text-white text-xs rounded font-medium"
-                  >
-                    {loading ? <Loader2 size={12} className="animate-spin" /> : <Plug size={12} />}
-                    Connect
-                  </button>
-                </div>
-                <p className="text-[10px] text-gray-500 mt-1">
-                  URL should point to the common/ folder served via HTTP (static file server, git raw, or API)
+                <label className="text-xs text-gray-300 font-medium block mb-2">Load from local folder</label>
+                <button
+                  onClick={() => folderInputRef.current?.click()}
+                  disabled={loading}
+                  className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-700 text-white text-sm rounded-lg font-medium transition-colors"
+                >
+                  {loading ? <Loader2 size={16} className="animate-spin" /> : <FolderOpen size={16} />}
+                  Select common/ folder
+                </button>
+                <p className="text-[10px] text-gray-500 mt-1.5">
+                  Select your local common/ folder containing DSL catalog files (systemcatalog, archetypes, constants, etc.)
                 </p>
               </div>
 
-              {/* Authentication */}
-              <div>
-                <label className="text-xs text-gray-400 block mb-1">Authentication <span className="text-gray-600">(optional)</span></label>
-                <div className="space-y-2">
-                  <input
-                    type="text"
-                    value={username}
-                    onChange={e => setUsername(e.target.value)}
-                    placeholder="Username (LDAP / Azure DevOps)"
-                    className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-1.5 text-white text-xs placeholder-gray-500 focus:outline-none focus:border-blue-500"
-                  />
-                  <div className="relative">
-                    <input
-                      type={showPassword ? 'text' : 'password'}
-                      value={password}
-                      onChange={e => setPassword(e.target.value)}
-                      placeholder="Password or Personal Access Token"
-                      className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-1.5 pr-9 text-white text-xs placeholder-gray-500 focus:outline-none focus:border-blue-500"
-                      onKeyDown={e => e.key === 'Enter' && handleConnect()}
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowPassword(v => !v)}
-                      className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300"
-                      tabIndex={-1}
-                    >
-                      {showPassword ? <EyeOff size={13} /> : <Eye size={13} />}
-                    </button>
+              {/* Secondary: Connect via URL (collapsible) */}
+              <div className="border-t border-gray-700 pt-3">
+                <button
+                  onClick={() => setShowUrlSection(v => !v)}
+                  className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-gray-200 font-medium"
+                >
+                  {showUrlSection ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                  Or connect via URL
+                </button>
+
+                {showUrlSection && (
+                  <div className="mt-3 space-y-3 pl-1">
+                    <div>
+                      <label className="text-xs text-gray-400 block mb-1">Catalog URL</label>
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          value={urlInput}
+                          onChange={e => setUrlInput(e.target.value)}
+                          placeholder="https://git.company.com/raw/repo/main/common"
+                          className="flex-1 bg-gray-800 border border-gray-600 rounded px-3 py-1.5 text-white text-xs placeholder-gray-500 focus:outline-none focus:border-blue-500"
+                          onKeyDown={e => e.key === 'Enter' && handleConnect()}
+                        />
+                        <button
+                          onClick={handleConnect}
+                          disabled={loading || !urlInput.trim()}
+                          className="flex items-center gap-1 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-700 text-white text-xs rounded font-medium"
+                        >
+                          {loading ? <Loader2 size={12} className="animate-spin" /> : <Plug size={12} />}
+                          Connect
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Authentication */}
+                    <div>
+                      <label className="text-xs text-gray-400 block mb-1">Authentication <span className="text-gray-600">(optional)</span></label>
+                      <div className="space-y-2">
+                        <input
+                          type="text"
+                          value={username}
+                          onChange={e => setUsername(e.target.value)}
+                          placeholder="Username (LDAP / Azure DevOps)"
+                          className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-1.5 text-white text-xs placeholder-gray-500 focus:outline-none focus:border-blue-500"
+                        />
+                        <div className="relative">
+                          <input
+                            type={showPassword ? 'text' : 'password'}
+                            value={password}
+                            onChange={e => setPassword(e.target.value)}
+                            placeholder="Password or Personal Access Token"
+                            className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-1.5 pr-9 text-white text-xs placeholder-gray-500 focus:outline-none focus:border-blue-500"
+                            onKeyDown={e => e.key === 'Enter' && handleConnect()}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setShowPassword(v => !v)}
+                            className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300"
+                            tabIndex={-1}
+                          >
+                            {showPassword ? <EyeOff size={13} /> : <Eye size={13} />}
+                          </button>
+                        </div>
+                      </div>
+                      <p className="text-[10px] text-gray-500 mt-1">
+                        For Azure DevOps with LDAP, use your network credentials or a Personal Access Token (PAT).
+                      </p>
+                    </div>
                   </div>
-                </div>
-                <p className="text-[10px] text-gray-500 mt-1">
-                  For Azure DevOps with LDAP, use your network credentials or a Personal Access Token (PAT).
-                </p>
+                )}
               </div>
 
               {error && (
@@ -160,7 +211,8 @@ export default function CatalogPanel({ onClose, onAddSystem }) {
                 </div>
               )}
 
-              <div className="border-t border-gray-700 pt-4">
+              {/* Sample catalog */}
+              <div className="border-t border-gray-700 pt-3">
                 <p className="text-xs text-gray-400 mb-2">Or load sample data for testing:</p>
                 <button
                   onClick={() => { loadSampleCatalog(); setTab('browse'); }}
@@ -171,17 +223,20 @@ export default function CatalogPanel({ onClose, onAddSystem }) {
                 </button>
               </div>
 
+              {/* Connected catalog info */}
               {catalog && (
                 <div className="border-t border-gray-700 pt-4">
                   <div className="flex items-center justify-between mb-2">
                     <p className="text-xs text-gray-400">Catalog loaded from: <span className="text-white">{catalog.baseUrl}</span></p>
                     <div className="flex gap-2">
-                      <button
-                        onClick={() => catalog.baseUrl !== 'sample' && loadCatalogFromUrl(catalog.baseUrl, authConfig)}
-                        className="flex items-center gap-1 px-2 py-1 bg-gray-700 hover:bg-gray-600 text-white text-[10px] rounded"
-                      >
-                        <RefreshCw size={10} /> Reload
-                      </button>
+                      {catalog.baseUrl !== 'sample' && catalog.baseUrl !== 'local' && (
+                        <button
+                          onClick={() => loadCatalogFromUrl(catalog.baseUrl, authConfig)}
+                          className="flex items-center gap-1 px-2 py-1 bg-gray-700 hover:bg-gray-600 text-white text-[10px] rounded"
+                        >
+                          <RefreshCw size={10} /> Reload
+                        </button>
+                      )}
                       <button
                         onClick={clearCatalog}
                         className="flex items-center gap-1 px-2 py-1 bg-red-900/50 hover:bg-red-800 text-red-300 text-[10px] rounded"
