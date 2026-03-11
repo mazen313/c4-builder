@@ -64,7 +64,7 @@ function emptyCatalog(baseUrl) {
     baseUrl,
     systems: { internal: [], external: [], persons: [], pending: [] },
     archetypes: { containers: [], deploymentNodes: [], relationships: [] },
-    constants: { environments: {}, exchanges: {}, protocols: {}, technologies: {} },
+    constants: { environments: {}, exchanges: {}, protocols: {}, technologies: {}, other: {} },
     platform: [],
     styles: '',
     errors: [],
@@ -94,6 +94,77 @@ function setPath(obj, path, value) {
 }
 
 /**
+ * Route a file to its parser based on directory and filename patterns.
+ * Returns { parser, target } or null if the file should be skipped.
+ *
+ * Special parser values:
+ *   'platform' — use parsePlatform(text, filename)
+ *   'styles'   — use parseStyles(text) and concatenate
+ */
+function routeFile(relPath) {
+  if (!relPath.endsWith('.dsl')) return null;
+
+  const parts = relPath.split('/');
+  const dir = parts[0].toLowerCase();
+  const filename = parts[parts.length - 1].replace(/\.dsl$/i, '').toLowerCase();
+
+  if (dir === 'systemcatalog') {
+    if (filename.includes('person'))
+      return { parser: parsePersons, target: 'systems.persons' };
+    if (filename.includes('external') || filename.includes('provider'))
+      return { parser: (txt) => parseSystems(txt, true), target: 'systems.external' };
+    if (filename.includes('toadd') || filename.includes('pending'))
+      return { parser: (txt) => parseSystems(txt, false), target: 'systems.pending' };
+    return { parser: (txt) => parseSystems(txt, false), target: 'systems.internal' };
+  }
+
+  if (dir === 'archetypes') {
+    if (filename.includes('relationship') || filename.includes('rel'))
+      return { parser: parseRelationships, target: 'archetypes.relationships' };
+    if (filename.includes('deployment') || filename.includes('node'))
+      return { parser: (txt) => parseArchetypes(txt, 'deploymentNode'), target: 'archetypes.deploymentNodes' };
+    return { parser: (txt) => parseArchetypes(txt, 'container'), target: 'archetypes.containers' };
+  }
+
+  if (dir === 'constants') {
+    if (filename.includes('environment') || filename.includes('env'))
+      return { parser: parseConstants, target: 'constants.environments' };
+    if (filename.includes('exchange'))
+      return { parser: parseConstants, target: 'constants.exchanges' };
+    if (filename.includes('protocol'))
+      return { parser: parseConstants, target: 'constants.protocols' };
+    if (filename.includes('technolog'))
+      return { parser: parseConstants, target: 'constants.technologies' };
+    return { parser: parseConstants, target: 'constants.other' };
+  }
+
+  if (dir === 'platform')
+    return { parser: 'platform', target: 'platform' };
+
+  if (dir === 'deploymentsnode' || dir === 'deploymentnode' || dir === 'deploymentnodes')
+    return { parser: (txt) => parseArchetypes(txt, 'deploymentNode'), target: 'archetypes.deploymentNodes' };
+
+  if (dir === 'styles')
+    return { parser: 'styles', target: 'styles' };
+
+  return null;
+}
+
+/**
+ * Apply a routed file's parsed result to the catalog.
+ */
+function applyRoute(catalog, route, text, filename) {
+  if (route.parser === 'platform') {
+    catalog.platform.push(...parsePlatform(text, filename));
+  } else if (route.parser === 'styles') {
+    const s = parseStyles(text);
+    catalog.styles = catalog.styles ? catalog.styles + '\n' + s : s;
+  } else {
+    setPath(catalog, route.target, route.parser(text));
+  }
+}
+
+/**
  * Fetch a single file, returning null on 404 or network error.
  *
  * @param {string} baseUrl - Base URL to the common/ folder
@@ -105,7 +176,16 @@ function setPath(obj, path, value) {
  * @param {boolean} [authConfig.useProxy] - Route through Vite dev proxy (bypasses CORS + SSL)
  */
 async function fetchFile(baseUrl, path, authConfig) {
-  const fullUrl = `${baseUrl.replace(/\/+$/, '')}/${path}`;
+  // Handle Azure DevOps URLs with ?path= query parameter
+  let fullUrl;
+  if (baseUrl.includes('?path=') || baseUrl.includes('&path=')) {
+    const url = new URL(baseUrl);
+    const basePath = url.searchParams.get('path') || '/';
+    url.searchParams.set('path', `${basePath.replace(/\/+$/, '')}/${path}`);
+    fullUrl = url.toString();
+  } else {
+    fullUrl = `${baseUrl.replace(/\/+$/, '')}/${path}`;
+  }
   const headers = {};
   const fetchOptions = { headers };
 
@@ -155,92 +235,77 @@ async function loadManifest(baseUrl, authConfig) {
 }
 
 /**
+ * Discover all .dsl files available at the remote URL.
+ * Tries (in order):
+ *   1. Proxy-based discovery via /api/catalog-discover (lists files server-side, supports Azure DevOps)
+ *   2. Manifest file (catalog-manifest.json)
+ *   3. Fallback to hardcoded known paths
+ */
+async function discoverFiles(baseUrl, authConfig) {
+  // 1. Try proxy-based directory listing
+  if (authConfig?.useProxy) {
+    try {
+      const headers = {};
+      if (authConfig?.authMode !== 'ntlm' && authConfig?.username && authConfig?.password) {
+        headers['Authorization'] = `Basic ${btoa(authConfig.username + ':' + authConfig.password)}`;
+      }
+      const res = await fetch(`/api/catalog-discover?url=${encodeURIComponent(baseUrl)}`, { headers });
+      if (res.ok) {
+        const files = await res.json();
+        if (Array.isArray(files) && files.length > 0) return files;
+      }
+    } catch { /* fall through */ }
+  }
+
+  // 2. Try manifest
+  const manifest = await loadManifest(baseUrl, authConfig);
+  if (manifest?.files) return manifest.files;
+
+  // 3. Fallback: hardcoded known paths
+  return [
+    ...CORE_FILES.map(f => f.path),
+    ...PLATFORM_FILES,
+    ...DEPLOYMENT_NODE_FILES,
+    'styles/styles.dsl',
+  ];
+}
+
+/**
  * Load the complete company catalog from a base URL.
+ * Auto-discovers all .dsl files and routes them to parsers by directory/filename patterns.
  *
  * @param {string} baseUrl - URL pointing to the common/ folder
- *   e.g., "https://git.company.com/raw/repo/main/common"
- *   or "http://localhost:3001/common"
- * @param {{ username: string, password: string } | null} authConfig - Optional basic auth credentials
- *   for Azure DevOps or other servers requiring LDAP / PAT authentication
+ * @param {object|null} authConfig - Authentication and connection settings
  * @returns {Promise<CompanyCatalog>} - Parsed catalog structure
  */
 export async function loadCatalog(baseUrl, authConfig = null) {
   const catalog = emptyCatalog(baseUrl);
   const errors = [];
 
-  // Try loading manifest for file discovery
-  const manifest = await loadManifest(baseUrl, authConfig);
+  // Discover all files in the remote directory
+  const filePaths = await discoverFiles(baseUrl, authConfig);
 
-  // Determine platform files to load
-  let platformPaths = PLATFORM_FILES;
-  let deployNodePaths = DEPLOYMENT_NODE_FILES;
-  if (manifest?.files) {
-    platformPaths = manifest.files.filter(f => f.startsWith('platform/') && f.endsWith('.dsl'));
-    deployNodePaths = manifest.files.filter(f => f.startsWith('deploymentsnode/') && f.endsWith('.dsl'));
-  }
-
-  // Fetch all core files in parallel
-  const coreResults = await Promise.all(
-    CORE_FILES.map(async (entry) => {
-      const text = await fetchFile(baseUrl, entry.path, authConfig);
-      return { ...entry, text };
+  // Fetch all files in parallel
+  const results = await Promise.all(
+    filePaths.map(async (relPath) => {
+      const text = await fetchFile(baseUrl, relPath, authConfig);
+      return { relPath, text };
     })
   );
 
-  // Parse core files
-  for (const { path, parser, target, text } of coreResults) {
-    if (text === null) {
-      errors.push(`Could not load ${path}`);
-      continue;
-    }
+  // Route and parse each file
+  for (const { relPath, text } of results) {
+    if (!text) continue;
+    const route = routeFile(relPath);
+    if (!route) continue;
+
     try {
-      const parsed = parser(text);
-      setPath(catalog, target, parsed);
+      const filename = relPath.split('/').pop();
+      applyRoute(catalog, route, text, filename);
     } catch (err) {
-      errors.push(`Error parsing ${path}: ${err.message}`);
+      errors.push(`Error parsing ${relPath}: ${err.message}`);
     }
   }
-
-  // Fetch platform files in parallel
-  const platformResults = await Promise.all(
-    platformPaths.map(async (path) => {
-      const text = await fetchFile(baseUrl, path, authConfig);
-      const filename = path.split('/').pop();
-      return { path, text, filename };
-    })
-  );
-
-  for (const { path, text, filename } of platformResults) {
-    if (text === null) continue; // Optional files — skip silently
-    try {
-      const components = parsePlatform(text, filename);
-      catalog.platform.push(...components);
-    } catch (err) {
-      errors.push(`Error parsing ${path}: ${err.message}`);
-    }
-  }
-
-  // Fetch deployment node files in parallel
-  const deployResults = await Promise.all(
-    deployNodePaths.map(async (path) => {
-      const text = await fetchFile(baseUrl, path, authConfig);
-      return { path, text };
-    })
-  );
-
-  for (const { path, text } of deployResults) {
-    if (text === null) continue;
-    try {
-      const nodes = parseArchetypes(text, 'deploymentNode');
-      catalog.archetypes.deploymentNodes.push(...nodes);
-    } catch (err) {
-      errors.push(`Error parsing ${path}: ${err.message}`);
-    }
-  }
-
-  // Fetch styles
-  const stylesText = await fetchFile(baseUrl, 'styles/styles.dsl', authConfig) || await fetchFile(baseUrl, 'styles', authConfig);
-  if (stylesText) catalog.styles = parseStyles(stylesText);
 
   catalog.loaded = true;
   catalog.errors = errors;
@@ -267,7 +332,7 @@ function readFileAsText(file) {
 
 /**
  * Load catalog from a local FileList (from <input webkitdirectory>).
- * Matches files by their relative path against CORE_FILES, PLATFORM_FILES, etc.
+ * Auto-discovers all .dsl files and routes them to parsers by directory/filename patterns.
  *
  * @param {FileList} fileList - Files from a folder picker input
  * @returns {Promise<CompanyCatalog>} - Parsed catalog structure
@@ -276,9 +341,8 @@ export async function loadCatalogFromFiles(fileList) {
   const catalog = emptyCatalog('local');
   const errors = [];
 
-  // Build a path→File map, normalizing the relative path.
+  // Build path → File map, stripping the selected folder name prefix.
   // webkitRelativePath gives "folderName/systemcatalog/cmdb.dsl"
-  // We strip the first directory segment (the selected folder name) to get the relative path.
   const fileMap = {};
   for (const file of fileList) {
     if (!file.name.endsWith('.dsl') && !file.name.endsWith('.json')) continue;
@@ -286,48 +350,19 @@ export async function loadCatalogFromFiles(fileList) {
     fileMap[relPath] = file;
   }
 
-  // Process CORE_FILES
-  for (const entry of CORE_FILES) {
-    const file = fileMap[entry.path];
-    if (!file) {
-      errors.push(`File not found: ${entry.path}`);
-      continue;
-    }
+  // Route and parse every .dsl file
+  for (const [relPath, file] of Object.entries(fileMap)) {
+    if (!relPath.endsWith('.dsl')) continue;
+    const route = routeFile(relPath);
+    if (!route) continue;
+
     try {
       const text = await readFileAsText(file);
-      if (text) setPath(catalog, entry.target, entry.parser(text));
+      if (!text) continue;
+      applyRoute(catalog, route, text, file.name);
     } catch (err) {
-      errors.push(`Error parsing ${entry.path}: ${err.message}`);
+      errors.push(`Error parsing ${relPath}: ${err.message}`);
     }
-  }
-
-  // Process platform files (any platform/*.dsl found in the folder)
-  const platformFiles = Object.entries(fileMap).filter(([p]) => p.startsWith('platform/') && p.endsWith('.dsl'));
-  for (const [path, file] of platformFiles) {
-    try {
-      const text = await readFileAsText(file);
-      if (text) catalog.platform.push(...parsePlatform(text, file.name));
-    } catch (err) {
-      errors.push(`Error parsing ${path}: ${err.message}`);
-    }
-  }
-
-  // Process deployment node files (any deploymentsnode/*.dsl)
-  const deployFiles = Object.entries(fileMap).filter(([p]) => p.startsWith('deploymentsnode/') && p.endsWith('.dsl'));
-  for (const [path, file] of deployFiles) {
-    try {
-      const text = await readFileAsText(file);
-      if (text) catalog.archetypes.deploymentNodes.push(...parseArchetypes(text, 'deploymentNode'));
-    } catch (err) {
-      errors.push(`Error parsing ${path}: ${err.message}`);
-    }
-  }
-
-  // Process styles
-  const stylesFile = fileMap['styles/styles.dsl'] || fileMap['styles'];
-  if (stylesFile) {
-    const text = await readFileAsText(stylesFile);
-    if (text) catalog.styles = parseStyles(text);
   }
 
   catalog.loaded = true;
